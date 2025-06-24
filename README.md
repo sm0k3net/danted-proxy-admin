@@ -5,7 +5,7 @@ Admin panel for dante-server socks proxy
 2. Put index.php script into your published web folder
 3. Make sure it has access to your dante-server config file (/etc/danted.conf)
 4. Need to add www-data (or additionally created) user to sudoers. Better to make it with help of separate file within /etc/sudoers.d/dante-web
-5. Put following line inside our dante-web file: www-data ALL=NOPASSWD: /usr/sbin/useradd, /usr/sbin/userdel, /usr/sbin/usermod, /usr/bin/passwd, /usr/bin/chpasswd, /bin/systemctl reload danted
+5. Put following line inside our dante-web file: `www-data ALL=NOPASSWD: /usr/sbin/useradd, /usr/sbin/userdel, /usr/sbin/usermod, /usr/bin/passwd, /usr/bin/chpasswd, /bin/systemctl reload danted`
 6. Use following config for danted.conf file:
 
 ```
