@@ -21,3 +21,5 @@ socks pass {
 from: 0.0.0.0/0 to: 0.0.0.0/0
 socksmethod: username
 }
+
+![image](https://github.com/user-attachments/assets/ff60e996-51aa-40f9-9951-d52556dc3eb9)
