@@ -12,7 +12,7 @@ Admin panel for dante-server socks proxy
 logoutput: syslog
 user.privileged: root
 user.unprivileged: nobody
-internal: 0.0.0.0 port=1089
+internal: 0.0.0.0 port=1080
 external: eth0
 socksmethod: username
 clientmethod: none
