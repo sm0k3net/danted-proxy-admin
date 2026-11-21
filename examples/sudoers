@@ -1,0 +1,2 @@
+# Match the dedicated PHP-FPM worker and allow only this helper with no arguments.
+dante-web ALL=(root) NOPASSWD:NOLOG_INPUT: /usr/local/sbin/dante-proxy-admin ""

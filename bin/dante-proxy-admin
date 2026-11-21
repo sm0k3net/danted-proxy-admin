@@ -1,0 +1,141 @@
+#!/usr/bin/python3 -I
+"""Privileged account operations for the Dante Proxy Admin web panel."""
+
+import fcntl
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+
+GROUP = "dante-proxy-users"
+SHELL = "/bin/false"
+USERNAME = re.compile(r"proxy[A-Za-z0-9_]{1,27}", re.ASCII)
+ENVIRONMENT = {"PATH": "/usr/sbin:/usr/bin", "LC_ALL": "C"}
+
+
+class AccountError(Exception):
+    pass
+
+
+def local_entries(path):
+    with Path(path).open(encoding="utf-8", errors="replace") as source:
+        for line in source:
+            yield line.rstrip("\n").split(":")
+
+
+def managed_accounts():
+    gid = next((row[2] for row in local_entries("/etc/group") if len(row) == 4 and row[0] == GROUP), None)
+    if gid is None or int(gid) <= 0:
+        raise AccountError("The dante-proxy-users system group is missing or invalid.")
+    return {
+        row[0]: {"username": row[0], "uid": int(row[2]), "shell": row[6]}
+        for row in local_entries("/etc/passwd")
+        if len(row) == 7 and USERNAME.fullmatch(row[0])
+        and int(row[2]) > 0 and row[3] == gid and row[6] == SHELL
+    }
+
+
+def run(arguments, input_text=None):
+    try:
+        return subprocess.run(
+            arguments, input=input_text, text=True, encoding="utf-8", capture_output=True,
+            stdin=subprocess.DEVNULL if input_text is None else None,
+            env=ENVIRONMENT, timeout=10, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise AccountError("A system account command could not complete.") from None
+
+
+def status(username):
+    result = run(["/usr/bin/passwd", "-S", username])
+    fields = result.stdout.split()
+    if result.returncode or len(fields) < 2 or fields[0] != username:
+        return "unknown"
+    return {"P": "active", "L": "locked", "NP": "no-password"}.get(fields[1], "unknown")
+
+
+def create(username, password):
+    if (not isinstance(password, str) or not 12 <= len(password.encode("utf-8")) <= 72
+            or any(character in password for character in ("\r", "\n", "\x00", ":"))):
+        raise AccountError("Use a 12–72 byte password without colons, newlines, or null bytes.")
+    result = run(["/usr/sbin/useradd", "-r", "-M", "-g", GROUP, "-s", SHELL, "--", username])
+    if result.returncode:
+        raise AccountError("The account could not be created. Check whether the username already exists.")
+    try:
+        result = run(["/usr/sbin/chpasswd"], f"{username}:{password}\n")
+        if result.returncode or status(username) != "active":
+            raise AccountError("The password could not be set.")
+    except AccountError:
+        try:
+            rolled_back = run(["/usr/sbin/userdel", "--", username]).returncode == 0
+        except AccountError:
+            rolled_back = False
+        if not rolled_back:
+            raise AccountError("Account setup failed and rollback could not complete. Review the account on the host.") from None
+        raise
+
+
+def dispatch(request):
+    accounts = managed_accounts()
+    action = request.get("action")
+    if action == "list":
+        return {
+            "accounts": [
+                {**accounts[name], "status": status(name)}
+                for name in sorted(accounts)
+            ],
+        }
+    username = request.get("username")
+    if not isinstance(username, str) or not USERNAME.fullmatch(username):
+        raise AccountError("Use a username starting with proxy, followed by up to 27 letters, digits, or underscores.")
+    if action == "create":
+        create(username, request.get("password"))
+        return {}
+    if username not in accounts:
+        raise AccountError("This username is outside the managed proxy account group.")
+    if action == "delete":
+        result = run(["/usr/sbin/userdel", "--", username])
+    elif action in ("lock", "unlock"):
+        current = status(username)
+        target = "locked" if action == "lock" else "active"
+        if current == target:
+            return {}
+        if current not in ("active", "locked"):
+            raise AccountError("This account has no usable password status. Review it on the host.")
+        flag = "--lock" if action == "lock" else "--unlock"
+        result = run(["/usr/sbin/usermod", flag, "--", username])
+        if result.returncode or status(username) != target:
+            raise AccountError("The requested account status could not be confirmed.")
+    else:
+        raise AccountError("Unknown account action.")
+    if result.returncode:
+        raise AccountError("The system could not complete the account change.")
+    return {}
+
+
+def main():
+    try:
+        if os.geteuid() != 0 or len(sys.argv) != 1:
+            raise AccountError("Run this helper as root with a JSON request on standard input.")
+        raw = sys.stdin.buffer.read(4097)
+        if len(raw) > 4096:
+            raise AccountError("The request is too large.")
+        request = json.loads(raw)
+        if not isinstance(request, dict):
+            raise AccountError("Expected a JSON object.")
+        os.umask(0o077)
+        with open("/run/dante-proxy-admin.lock", "a", encoding="utf-8") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            response = {"ok": True, **dispatch(request)}
+    except AccountError as error:
+        response = {"ok": False, "error": str(error)}
+    except (OSError, ValueError):
+        response = {"ok": False, "error": "The helper could not read the request or local account data."}
+    print(json.dumps(response, ensure_ascii=True))
+
+
+if __name__ == "__main__":
+    main()
